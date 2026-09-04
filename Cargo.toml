@@ -1,0 +1,33 @@
+[package]
+name = "adonword"
+version = "0.1.0"
+edition = "2021"
+description = "Active-defense sentinel for AI agents around the BIT ecosystem: file integrity baseline, suspicious process monitoring, listening-port alerts"
+license = "Apache-2.0"
+repository = "https://github.com/yxpil/ADONWORD"
+keywords = ["ai", "agent", "security", "bit", "cli"]
+categories = ["command-line-utilities"]
+
+[[bin]]
+name = "adonword"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+axum = "0.8"
+chrono = "0.4"
+clap = { version = "4", features = ["derive"] }
+hex = "0.4"
+netstat2 = "0.9"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+sysinfo = "0.33"
+tokio = { version = "1", features = ["macros", "net", "rt-multi-thread"] }
+toml = "0.8"
+ureq = { version = "2", features = ["json"] }
+walkdir = "2"
+home = "0.1"
+
+[dev-dependencies]
+tempfile = "3"
