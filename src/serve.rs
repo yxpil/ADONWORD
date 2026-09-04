@@ -2,7 +2,8 @@ use crate::baseline::{self, CheckReport};
 use crate::config::Config;
 use crate::state;
 use anyhow::{Context, Result};
-use axum::extract::{rejection::JsonRejection, State};
+use axum::body::Bytes;
+use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use axum::routing::{get, post};
@@ -20,7 +21,7 @@ pub struct AppState {
     pub token: Option<Arc<String>>,
 }
 
-/// Start the HTTP API (BIT Remote tool compatible).
+/// Start the HTTP API (BIT Remote tool compatible) plus MCP.
 pub async fn run(
     cfg: Config,
     data_dir: PathBuf,
@@ -37,13 +38,14 @@ pub async fn run(
         .route("/health", get(health))
         .route("/report", get(report))
         .route("/invoke", post(invoke))
+        .merge(crate::mcp::routes())
         .with_state(state);
     let addr = format!("{host}:{port}");
     let listener = tokio::net::TcpListener::bind(&addr)
         .await
         .with_context(|| format!("failed to bind {addr}"))?;
     eprintln!(
-        "adonword serve listening on http://{}",
+        "adonword serve listening on http://{} (POST /invoke, POST /mcp MCP)",
         listener.local_addr()?
     );
     axum::serve(listener, app).await?;
@@ -54,7 +56,7 @@ async fn health() -> impl IntoResponse {
     Json(json!({"ok": true}))
 }
 
-fn authorized(headers: &HeaderMap, state: &AppState) -> bool {
+pub(crate) fn authorized(headers: &HeaderMap, state: &AppState) -> bool {
     match &state.token {
         None => true,
         Some(token) => headers
@@ -68,13 +70,6 @@ fn unauthorized() -> ApiError {
     (
         StatusCode::UNAUTHORIZED,
         Json(json!({"error": "missing or invalid bearer token"})),
-    )
-}
-
-fn internal(e: anyhow::Error) -> ApiError {
-    (
-        StatusCode::INTERNAL_SERVER_ERROR,
-        Json(json!({"error": e.to_string()})),
     )
 }
 
@@ -96,46 +91,37 @@ async fn report(
     Ok(Json(stored_report(&state)))
 }
 
-/// BIT Remote protocol entry point. Payload:
-/// `{"tool_id": "...", "tool": "...", "invoked_by": "...", "params": {...}}`.
-/// Routed on `params.action` (fallback `params.tool`):
-/// `scan` | `baseline_check` | `report`.
-async fn invoke(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    body: Result<Json<Value>, JsonRejection>,
-) -> Result<Json<Value>, ApiError> {
-    if !authorized(&headers, &state) {
-        return Err(unauthorized());
-    }
-    let params = match body {
-        Ok(Json(value)) => value.get("params").cloned().unwrap_or_else(|| json!({})),
-        Err(_) => json!({}),
-    };
-    let action = params
-        .get("action")
-        .and_then(Value::as_str)
-        .or_else(|| params.get("tool").and_then(Value::as_str))
-        .unwrap_or_default()
-        .to_string();
+/// Why an action call failed. `Bad` maps to HTTP 400, `Internal` to 500; the
+/// MCP surface flattens both into `isError` results.
+pub enum ActionError {
+    Bad(String),
+    Internal(String),
+}
 
-    match action.as_str() {
+/// Shared action routing used by `POST /invoke` and the MCP `tools/call`.
+/// The three actions take no parameters; the action name alone selects the
+/// behavior, so results and authorization agree across both protocols.
+pub async fn dispatch_action(
+    state: &AppState,
+    action: &str,
+) -> std::result::Result<Value, ActionError> {
+    match action {
         "scan" => {
-            let st = state.clone();
+            let cfg = state.cfg.clone();
+            let data_dir = state.data_dir.clone();
             let result =
-                tokio::task::spawn_blocking(move || crate::watch::scan_once(&st.cfg, &st.data_dir))
+                tokio::task::spawn_blocking(move || crate::watch::scan_once(&cfg, &data_dir))
                     .await
-                    .map_err(|e| internal(anyhow::anyhow!(e.to_string())))?
-                    .map_err(internal)?;
-            Ok(Json(
-                serde_json::to_value(&result).map_err(|e| internal(e.into()))?,
-            ))
+                    .map_err(|e| ActionError::Internal(e.to_string()))?
+                    .map_err(|e| ActionError::Internal(e.to_string()))?;
+            serde_json::to_value(&result).map_err(|e| ActionError::Internal(e.to_string()))
         }
         "baseline_check" => {
-            let st = state.clone();
+            let cfg = state.cfg.clone();
+            let data_dir = state.data_dir.clone();
             let report = tokio::task::spawn_blocking(move || -> Result<CheckReport> {
-                match baseline::load(&st.data_dir)? {
-                    Some(b) => Ok(baseline::check(&st.cfg, &b)),
+                match baseline::load(&data_dir)? {
+                    Some(b) => Ok(baseline::check(&cfg, &b)),
                     None => Ok(CheckReport {
                         status: "missing".to_string(),
                         ..CheckReport::default()
@@ -143,18 +129,49 @@ async fn invoke(
                 }
             })
             .await
-            .map_err(|e| internal(anyhow::anyhow!(e.to_string())))?
-            .map_err(internal)?;
-            Ok(Json(
-                serde_json::to_value(&report).map_err(|e| internal(e.into()))?,
-            ))
+            .map_err(|e| ActionError::Internal(e.to_string()))?
+            .map_err(|e| ActionError::Internal(e.to_string()))?;
+            serde_json::to_value(&report).map_err(|e| ActionError::Internal(e.to_string()))
         }
-        "report" => Ok(Json(stored_report(&state))),
-        other => Err((
-            StatusCode::BAD_REQUEST,
-            Json(
-                json!({"error": format!("unknown action '{other}' — expected one of: scan, baseline_check, report")}),
-            ),
+        "report" => Ok(stored_report(state)),
+        other => Err(ActionError::Bad(format!(
+            "unknown action '{other}' — expected one of: scan, baseline_check, report"
+        ))),
+    }
+}
+
+/// BIT Remote protocol entry point. Payload:
+/// `{"tool_id": "...", "tool": "...", "invoked_by": "...", "params": {...}}`.
+/// Routed on `params.action` (fallback `params.tool`):
+/// `scan` | `baseline_check` | `report`.
+async fn invoke(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Json<Value>, ApiError> {
+    if !authorized(&headers, &state) {
+        return Err(unauthorized());
+    }
+    let payload: Value = match serde_json::from_slice(&body) {
+        Ok(v) => v,
+        Err(_) => json!({}),
+    };
+    let params = payload.get("params").cloned().unwrap_or_else(|| json!({}));
+    let action = params
+        .get("action")
+        .and_then(Value::as_str)
+        .or_else(|| params.get("tool").and_then(Value::as_str))
+        .unwrap_or_default()
+        .to_string();
+
+    match dispatch_action(&state, &action).await {
+        Ok(value) => Ok(Json(value)),
+        Err(ActionError::Bad(message)) => {
+            Err((StatusCode::BAD_REQUEST, Json(json!({"error": message}))))
+        }
+        Err(ActionError::Internal(message)) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": message})),
         )),
     }
 }

@@ -1,6 +1,6 @@
 [package]
 name = "adonword"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "Active-defense sentinel for AI agents around the BIT ecosystem: file integrity baseline, suspicious process monitoring, listening-port alerts"
 license = "Apache-2.0"

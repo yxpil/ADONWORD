@@ -24,7 +24,7 @@ ADONWORD is a local security-posture sentinel for AI agents (especially [BIT](ht
 - **Process monitoring** — `[process].blocklist` (case-insensitive, `*` glob supported) produces `crit` findings; a non-empty `[process].allowlist` produces `warn` findings for processes outside it. Empty allowlist = no restriction.
 - **Listening-port alerts** — TCP LISTEN sockets (via `netstat2`) are checked against `[ports].allowed` (single ports and `"8000-8100"` ranges).
 - **Scan daemon** — `watch` runs a scan every N seconds (default 30), alerts to **stderr**, optionally POSTs each finding to a webhook (10 s timeout) and deduplicates the same finding for 5 minutes.
-- **BIT integration** — CLI exec contract (JSON over stdin), Remote tool over HTTP, plain REST API.
+- **BIT integration** — CLI exec contract (JSON over stdin), Remote tool over HTTP, MCP (Streamable HTTP JSON-RPC), plain REST API.
 - **Cross-platform** — macOS / Linux / Windows; symlinks and unreadable paths are skipped and recorded as warnings, never fatal.
 - Rust (edition 2021), single static binary, data stored under `~/.adonword/` (override with `ADONWORD_DATA_DIR`).
 
@@ -34,14 +34,14 @@ Download a release binary:
 
 | Platform | Asset |
 | --- | --- |
-| macOS Apple Silicon | `adonword-v0.1.0-aarch64-apple-darwin.tar.gz` |
-| macOS Intel | `adonword-v0.1.0-x86_64-apple-darwin.tar.gz` |
-| Linux x64 | `adonword-v0.1.0-x86_64-unknown-linux-gnu.tar.gz` |
-| Windows x64 | `adonword-v0.1.0-x86_64-pc-windows-msvc.zip` |
+| macOS Apple Silicon | `adonword-v0.2.0-aarch64-apple-darwin.tar.gz` |
+| macOS Intel | `adonword-v0.2.0-x86_64-apple-darwin.tar.gz` |
+| Linux x64 | `adonword-v0.2.0-x86_64-unknown-linux-gnu.tar.gz` |
+| Windows x64 | `adonword-v0.2.0-x86_64-pc-windows-msvc.zip` |
 
 ```bash
-tar xzf adonword-v0.1.0-aarch64-apple-darwin.tar.gz
-sudo mv adonword-v0.1.0-aarch64-apple-darwin/adonword /usr/local/bin/
+tar xzf adonword-v0.2.0-aarch64-apple-darwin.tar.gz
+sudo mv adonword-v0.2.0-aarch64-apple-darwin/adonword /usr/local/bin/
 adonword --version
 ```
 
@@ -115,6 +115,8 @@ Three ways to attach ADONWORD to BIT ([bit](https://github.com/yxpil/bit) tools.
 
 BIT POSTs `{"tool_id": "...", "tool": "...", "invoked_by": "...", "params": {"action": "scan"}}` and receives the corresponding JSON.
 
+**2b) MCP client (Streamable HTTP)** — the same server speaks MCP on `http://127.0.0.1:8754/mcp` (BIT discovery also probes `POST /`): `initialize` → `tools/list` → `tools/call`. The three actions surface as three parameterless tools (`scan`, `baseline_check`, `report`); action failures are `isError: true` results.
+
 **3) Plain HTTP API (curl)**:
 
 ```bash
@@ -134,10 +136,11 @@ curl http://127.0.0.1:8754/report
 | `/health` | GET | Liveness probe, returns `{"ok":true}` |
 | `/report` | GET | Last persisted scan result (`{"status":"ok","report":{...}}` or `{"status":"no_report","report":null}`) |
 | `/invoke` | POST | BIT Remote protocol; `params.action` = `scan` \| `baseline_check` \| `report` |
+| `/mcp`, `/` | POST | MCP Streamable HTTP JSON-RPC: `initialize`, `tools/list`, `tools/call`, `ping` |
 
 - `POST /invoke` body: `{"tool_id":"...","tool":"...","invoked_by":"...","params":{"action":"scan"}}`. Routing falls back to `params.tool`. Unknown action → HTTP 400; missing/invalid body → treated as empty params.
 - `action=scan` runs a live inspection and persists it to `state.json` (so `/report` reflects it). `action=baseline_check` returns `{status, added, removed, modified, warnings}` with `status` = `clean` / `changed` / `missing`.
-- `serve --token <TOKEN>` protects `/report` and `/invoke` with `Authorization: Bearer <TOKEN>` (401 otherwise). `/health` stays open.
+- `serve --token <TOKEN>` protects `/report`, `/invoke` and the MCP endpoints with `Authorization: Bearer <TOKEN>` (401 otherwise). `/health` stays open.
 - Serve binds `127.0.0.1:8754` by default; override with `--host/--port`. The BIT ecosystem ports are: memorypool 8751, howcueme 8752, neton 8753, **adonword 8754**, firelin 8755.
 
 ---
@@ -156,7 +159,7 @@ ADONWORD 是面向 AI 智能体（尤其是 [BIT](https://github.com/yxpil/bit)�
 - **进程监控** — `[process].blocklist`（大小写不敏感，支持 `*` 通配）命中即产生 `crit` 告警；`[process].allowlist` 非空时，白名单之外的进程产生 `warn` 告警。留空 = 不限制。
 - **监听端口告警** — TCP LISTEN 套接字（基于 `netstat2`）对照 `[ports].allowed` 白名单（支持单端口与 `"8000-8100"` 范围写法）。
 - **巡检守护** — `watch` 每 N 秒（默认 30s）执行一轮 scan：告警打印到 **stderr**，可按 finding POST webhook（超时 10s），同一 finding 5 分钟内去重。
-- **BIT 集成** — CLI exec 契约（stdin JSON 合并）、Remote 工具（HTTP）、纯 REST API 三种方式。
+- **BIT 集成** — CLI exec 契约（stdin JSON 合并）、Remote 工具（HTTP）、MCP（Streamable HTTP）、纯 REST API 四种方式。
 - **跨平台** — macOS / Linux / Windows；符号链接与无权限路径跳过并记 warning，不会崩溃。
 - Rust（edition 2021）单一静态二进制；数据存于 `~/.adonword/`（可用环境变量 `ADONWORD_DATA_DIR` 覆盖）。
 
@@ -166,14 +169,14 @@ ADONWORD 是面向 AI 智能体（尤其是 [BIT](https://github.com/yxpil/bit)�
 
 | 平台 | 资产 |
 | --- | --- |
-| macOS Apple Silicon | `adonword-v0.1.0-aarch64-apple-darwin.tar.gz` |
-| macOS Intel | `adonword-v0.1.0-x86_64-apple-darwin.tar.gz` |
-| Linux x64 | `adonword-v0.1.0-x86_64-unknown-linux-gnu.tar.gz` |
-| Windows x64 | `adonword-v0.1.0-x86_64-pc-windows-msvc.zip` |
+| macOS Apple Silicon | `adonword-v0.2.0-aarch64-apple-darwin.tar.gz` |
+| macOS Intel | `adonword-v0.2.0-x86_64-apple-darwin.tar.gz` |
+| Linux x64 | `adonword-v0.2.0-x86_64-unknown-linux-gnu.tar.gz` |
+| Windows x64 | `adonword-v0.2.0-x86_64-pc-windows-msvc.zip` |
 
 ```bash
-tar xzf adonword-v0.1.0-aarch64-apple-darwin.tar.gz
-sudo mv adonword-v0.1.0-aarch64-apple-darwin/adonword /usr/local/bin/
+tar xzf adonword-v0.2.0-aarch64-apple-darwin.tar.gz
+sudo mv adonword-v0.2.0-aarch64-apple-darwin/adonword /usr/local/bin/
 adonword --version
 ```
 
@@ -247,6 +250,8 @@ Finding 类型：`file_added` / `file_removed` / `file_modified` / `baseline_mis
 
 BIT 会 POST `{"tool_id": "...", "tool": "...", "invoked_by": "...", "params": {"action": "scan"}}` 并收到对应 JSON 响应。
 
+**2b) MCP 客户端（Streamable HTTP）** — 同一服务在 `http://127.0.0.1:8754/mcp` 提供 MCP（BIT 发现流程也会探测 `POST /`）：`initialize` → `tools/list` → `tools/call`。三个动作以三个无参工具暴露（`scan`、`baseline_check`、`report`）；动作失败以 `isError: true` 结果返回。
+
 **3) 纯 HTTP API（curl）**：
 
 ```bash
@@ -266,10 +271,11 @@ curl http://127.0.0.1:8754/report
 | `/health` | GET | 存活探针，返回 `{"ok":true}` |
 | `/report` | GET | 最近一次持久化的扫描结果（`{"status":"ok","report":{...}}` 或 `{"status":"no_report","report":null}`） |
 | `/invoke` | POST | BIT Remote 协议；`params.action` = `scan` \| `baseline_check` \| `report` |
+| `/mcp`、`/` | POST | MCP Streamable HTTP JSON-RPC：`initialize`、`tools/list`、`tools/call`、`ping` |
 
 - `POST /invoke` 请求体：`{"tool_id":"...","tool":"...","invoked_by":"...","params":{"action":"scan"}}`。路由会回退读取 `params.tool`。未知 action → HTTP 400；缺失/非法请求体 → 按空 params 处理。
 - `action=scan` 会实时巡检并持久化到 `state.json`（`/report` 随之更新）。`action=baseline_check` 返回 `{status, added, removed, modified, warnings}`，`status` 为 `clean` / `changed` / `missing`。
-- `serve --token <TOKEN>` 后 `/report` 与 `/invoke` 需要 `Authorization: Bearer <TOKEN>`（否则 401）。`/health` 保持开放。
+- `serve --token <TOKEN>` 后 `/report`、`/invoke` 与 MCP 端点需要 `Authorization: Bearer <TOKEN>`（否则 401）。`/health` 保持开放。
 - serve 默认绑定 `127.0.0.1:8754`，可用 `--host/--port` 覆盖。BIT 生态默认端口：memorypool 8751、howcueme 8752、neton 8753、**adonword 8754**、firelin 8755。
 
 ### 安全与合规

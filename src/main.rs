@@ -1,6 +1,7 @@
 mod baseline;
 mod config;
 mod engine;
+mod mcp;
 mod serve;
 mod state;
 mod watch;
