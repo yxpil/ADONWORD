@@ -473,6 +473,8 @@ mod tests {
             },
             alert: crate::config::AlertConfig::default(),
         };
+        // Guarantee at least one listening TCP socket on any host.
+        let _listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let result = run_scan(&cfg, None);
         assert!(result.findings.iter().any(|f| f.kind == "baseline_missing"));
         // There is always at least one listening socket on a real system.
