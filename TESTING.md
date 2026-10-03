@@ -1,5 +1,12 @@
 # ADONWORD 测试说明
 
+- 测试完成：是（2026-10-04）
+- 测试日期：2026-10-04
+- 测试内容：单元覆盖 config（TOML 解析/端口范围/stdin JSON 合并）、engine（glob/进程匹配/目录收集/扫描）、baseline/watch/mcp（工具注册表）；集成覆盖 CLI 与 MCP 全链路；注入测试覆盖白名单键过滤、相对键不 `../` 逃逸 root、恶意端口、畸形 HTTP/JSON-RPC/stdin 载荷；钩子测试覆盖 MCP 工具注册表的注册→触发→失败隔离。
+- 运行命令：`cargo test`
+- 测试框架：Rust #[cfg(test)]
+- 模型：豆包（Doubao）生成
+
 单 crate（`src/main.rs` 二进制 + 内嵌模块）。单元测试留在各 `src/*.rs` 的 `#[cfg(test)]`，
 集成测试放仓库根 `tests/`（`cli.rs`、`mcp.rs` 既有；本次新增 `injection.rs`、`hooks.rs`）。
 
