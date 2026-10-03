@@ -481,4 +481,49 @@ mod tests {
         assert!(result.findings.iter().any(|f| f.kind == "unlisted_port"));
         assert_eq!(result.summary.total, result.findings.len());
     }
+
+    // ── 注入硬化：watch.paths 是不可信输入（stdin/配置可注入）。 ──
+
+    #[test]
+    fn relative_keys_never_contain_dotdot_or_escape_root() {
+        // 无论目录树多深，相对键必须始终落在 canonical root 之内，
+        // 绝不可能产出带 ".." 的键把记录写到 root 之外。
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("a/b/c")).unwrap();
+        fs::write(dir.path().join("a/b/c/deep.txt"), b"deep").unwrap();
+        fs::write(dir.path().join("top.txt"), b"top").unwrap();
+
+        let canonical = dir.path().canonicalize().unwrap();
+        let res = collect_files(&[dir.path().to_string_lossy().to_string()], &[]);
+        assert!(!res.files.is_empty());
+        for rel in res.files.keys() {
+            assert!(!rel.contains(".."), "相对键不得包含 ..: {rel}");
+            assert!(!rel.starts_with('/'), "相对键必须相对: {rel}");
+            // 把相对键拼回 root 后必须仍在 root 内（canonicalize 不逃逸）
+            let joined = canonical.join(rel).canonicalize().unwrap();
+            assert!(
+                joined.starts_with(&canonical),
+                "记录路径 {joined:?} 逃逸了 root {canonical:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn collect_files_tolerates_nonexistent_and_traversal_roots() {
+        // 喂一个不存在/指向他处的路径穿越串：只记 warning，不 panic、不扫描外部内容。
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("inside.txt"), b"i").unwrap();
+        let bogus = dir.path().join("..").join("definitely-not-here-xyz").to_string_lossy().to_string();
+        let res = collect_files(
+            &[dir.path().to_string_lossy().to_string(), bogus],
+            &[],
+        );
+        assert!(res.warnings.iter().any(|w| w.contains("not accessible") || w.contains("cannot")),
+            "不存在的根应记 warning: {:?}", res.warnings);
+        // 只收集到真实存在的那棵树里的 1 个文件；多根模式下键带 root 前缀
+        assert_eq!(res.files.len(), 1, "应只收集真实根里的文件: {:?}", res.files);
+        assert!(res.files.keys().any(|k| k.ends_with("inside.txt")),
+            "应收集到 inside.txt: {:?}", res.files);
+        assert!(res.files.keys().all(|k| !k.contains("definitely-not-here-xyz")));
+    }
 }

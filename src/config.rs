@@ -277,4 +277,47 @@ webhook_url = "http://example.com/hook"
         assert!(merged.ports.alert_unlisted);
         assert_eq!(merged.ports.allowed.len(), 5);
     }
+
+    // ── 注入硬化：stdin JSON 是 BIT/管道喂进来的不可信输入 ──
+
+    #[test]
+    fn unknown_stdin_sections_are_ignored_not_merged() {
+        // 攻击者塞一个白名单外的顶层键（甚至原型污染键）：必须被丢弃，
+        // 只有 watch/process/ports/alert 四个 section 能进配置。
+        let cfg = Config::default();
+        let stdin: Value = serde_json::from_str(
+            r#"{"evil":{"paths":["/etc"]},"__proto__":{"admin":true},"constructor":{"x":1}}"#,
+        )
+        .unwrap();
+        let merged = apply_config_overrides(cfg, &stdin).unwrap();
+        assert!(
+            merged.watch.paths.is_empty(),
+            "白名单外的 watch 注入不得生效: {:?}",
+            merged.watch.paths
+        );
+    }
+
+    #[test]
+    fn wrong_typed_stdin_paths_is_rejected_not_panicked() {
+        // paths 被喂成数字而非字符串数组 → serde 反序列化应干净报错，而非 panic。
+        let cfg = Config::default();
+        let stdin: Value = serde_json::from_str(r#"{"watch":{"paths":12345}}"#).unwrap();
+        let result = apply_config_overrides(cfg, &stdin);
+        assert!(result.is_err(), "类型错误的 paths 必须报错");
+    }
+
+    #[test]
+    fn expand_ports_handles_garbage_and_overflow_ranges() {
+        // 端口范围被喂恶意串（越界/非数字）→ 转成 warning，绝不 panic 或越界。
+        let specs = vec![
+            PortSpec::Range("99999-100000".to_string()), // 超出 u16
+            PortSpec::Range("abc-def".to_string()),
+            PortSpec::Range("5-1".to_string()), // start > end
+            PortSpec::Range("8000-8001".to_string()), // 合法仍要工作
+        ];
+        let (ports, warnings) = expand_ports(&specs);
+        assert_eq!(warnings.len(), 3, "三个恶意范围都应产生 warning: {warnings:?}");
+        assert!(ports.contains(&8000) && ports.contains(&8001));
+        assert_eq!(ports.len(), 2);
+    }
 }
